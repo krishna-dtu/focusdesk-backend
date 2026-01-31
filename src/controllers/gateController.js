@@ -6,6 +6,7 @@ const AccessRequest = require("../models/AccessRequest");
 const verifyQR = async (req, res) => {
   try {
     const { qrToken, gateId } = req.body;
+
     if (!qrToken || !gateId) {
       return res.status(400).json({
         status: "DENY",
@@ -13,123 +14,153 @@ const verifyQR = async (req, res) => {
       });
     }
 
-    // ✅ Decode JWT safely: verify signature, but also attempt decode for logging
+    // ✅ Verify JWT
     let decoded;
     try {
       decoded = jwt.verify(qrToken, process.env.JWT_SECRET);
     } catch (err) {
-      // try to decode without verifying to extract requestId/tokenId for logging
-      decoded = jwt.decode(qrToken) || {};
-
-      // If we couldn't extract identifying fields, return generic deny
-      if (!decoded || !decoded.requestId) {
-        return res.json({ status: "DENY", message: "INVALID_TOKEN" });
-      }
-      // else proceed but mark token invalid (we'll log and deny below)
-      await ScanLog.create({
-        requestId: decoded.requestId,
-        tokenId: decoded.tokenId || null,
-        passType: decoded.passType || null,
-        gateId,
-        result: "DENY",
-        reason: "INVALID_SIGNATURE",
+      return res.json({
+        status: "DENY",
+        message: "INVALID_SIGNATURE",
       });
-
-      return res.json({ status: "DENY", message: "INVALID_SIGNATURE" });
     }
 
-    const { tokenId, requestId, passType, validUntil } = decoded || {};
+    const { tokenId, requestId, passType, validUntil } = decoded;
 
     if (!tokenId || !requestId || !passType) {
-      // attempt to log if requestId present
-      if (requestId) {
-        await ScanLog.create({
-          requestId,
-          tokenId: tokenId || null,
-          passType: passType || null,
-          gateId,
-          result: "DENY",
-          reason: "INVALID_QR_PAYLOAD",
-        });
-      }
-
-      return res.json({ status: "DENY", message: "INVALID_QR_PAYLOAD" });
+      return res.json({
+        status: "DENY",
+        message: "INVALID_QR_PAYLOAD",
+      });
     }
 
-    // ✅ Expiry Check
+    // ✅ Expiry check
     if (validUntil && new Date() > new Date(validUntil)) {
-      await ScanLog.create({ requestId, tokenId, passType, gateId, result: "DENY", reason: "QR_EXPIRED" });
-      return res.json({ status: "DENY", message: "QR_EXPIRED" });
+      await ScanLog.create({
+        requestId,
+        tokenId,
+        passType,
+        gateId,
+        result: "DENY",
+        reason: "QR_EXPIRED",
+      });
+
+      return res.json({
+        status: "DENY",
+        message: "QR_EXPIRED",
+      });
     }
 
-    // ✅ QRPass must exist exactly
-    const qrPass = await QRPass.findOne({
-      where: { tokenId, passType },
-    });
+    // ✅ QRPass must exist
+    let qrPass;
+    try {
+      qrPass = await QRPass.findOne({
+        where: { tokenId, passType },
+      });
+    } catch (dbErr) {
+      return res.status(500).json({
+        status: "DENY",
+        message: "DATABASE_NOT_CONNECTED",
+        error: dbErr.message,
+      });
+    }
 
     if (!qrPass) {
-      await ScanLog.create({ requestId, tokenId, passType, gateId, result: "DENY", reason: "PASS_NOT_FOUND" });
-      return res.json({ status: "DENY", message: "PASS_NOT_FOUND" });
+      await ScanLog.create({
+        requestId,
+        tokenId,
+        passType,
+        gateId,
+        result: "DENY",
+        reason: "PASS_NOT_FOUND",
+      });
+
+      return res.json({
+        status: "DENY",
+        message: "PASS_NOT_FOUND",
+      });
     }
 
-    // ✅ AccessRequest must exist
+    // ✅ Prevent Token Replay
+    if (qrPass.used === true) {
+      await ScanLog.create({
+        requestId,
+        tokenId,
+        passType,
+        gateId,
+        result: "DENY",
+        reason: "TOKEN_ALREADY_USED",
+      });
+
+      return res.json({
+        status: "DENY",
+        message: "TOKEN_ALREADY_USED",
+      });
+    }
+
+    // ✅ Fetch Access Request
     const request = await AccessRequest.findByPk(requestId);
 
     if (!request) {
-      await ScanLog.create({ requestId, tokenId, passType, gateId, result: "DENY", reason: "USER_NOT_FOUND" });
-      return res.json({ status: "DENY", message: "USER_NOT_FOUND" });
+      return res.json({
+        status: "DENY",
+        message: "USER_NOT_FOUND",
+      });
     }
 
-    // ✅ Must be approved
     if (request.status !== "APPROVED") {
-      await ScanLog.create({ requestId, tokenId, passType, gateId, result: "DENY", reason: "NOT_APPROVED" });
-      return res.json({ status: "DENY", message: "NOT_APPROVED" });
+      return res.json({
+        status: "DENY",
+        message: "NOT_APPROVED",
+      });
     }
 
-    // ✅ STATE MACHINE
-
-    // --- ENTRY ---
+    // ✅ ENTRY
     if (passType === "IN") {
       if (request.currentState === "INSIDE") {
-        await ScanLog.create({ requestId, tokenId, passType, gateId, result: "DENY", reason: "ALREADY_INSIDE" });
-        return res.json({ status: "DENY", message: "ALREADY_INSIDE" });
+        return res.json({
+          status: "DENY",
+          message: "ALREADY_INSIDE",
+        });
       }
 
       request.currentState = "INSIDE";
       await request.save();
-
-      await ScanLog.create({ requestId, tokenId, passType, gateId, result: "ALLOW", reason: null });
-
-      return res.json({
-        status: "ALLOW",
-        message: "ENTRY_GRANTED",
-      });
     }
 
-    // --- EXIT ---
+    // ✅ EXIT
     if (passType === "OUT") {
       if (request.currentState === "OUTSIDE") {
-        await ScanLog.create({ requestId, tokenId, passType, gateId, result: "DENY", reason: "ALREADY_OUTSIDE" });
-        return res.json({ status: "DENY", message: "ALREADY_OUTSIDE" });
+        return res.json({
+          status: "DENY",
+          message: "ALREADY_OUTSIDE",
+        });
       }
 
       request.currentState = "OUTSIDE";
       await request.save();
-
-      await ScanLog.create({ requestId, tokenId, passType, gateId, result: "ALLOW", reason: null });
-
-      return res.json({
-        status: "ALLOW",
-        message: "EXIT_GRANTED",
-      });
     }
 
+    // ✅ Mark QRPass as used
+    qrPass.used = true;
+    await qrPass.save();
+
+    // ✅ Log scan
+    await ScanLog.create({
+      requestId,
+      tokenId,
+      passType,
+      gateId,
+      result: "ALLOW",
+      reason: null,
+    });
+
     return res.json({
-      status: "DENY",
-      message: "INVALID_PASS_TYPE",
+      status: "ALLOW",
+      message: passType === "IN" ? "ENTRY_GRANTED" : "EXIT_GRANTED",
     });
   } catch (err) {
-    console.log("VERIFY ERROR:", err.message);
+    console.log("VERIFY ERROR:", err);
 
     return res.status(500).json({
       status: "DENY",
