@@ -10,8 +10,12 @@ const app = express();
 
 app.use(cors());
 
-// ✅ MUST BE BEFORE ROUTES
-app.use(express.json());
+// ✅ Parse JSON properly (ESP32 + Postman + Render safe)
+app.use(express.json({ limit: "1mb" }));
+
+// ✅ Parse urlencoded (extra safety)
+app.use(express.urlencoded({ extended: true }));
+
 
 // Routes
 app.use("/api/user", userRoutes);
@@ -19,8 +23,10 @@ app.use("/api/admin", adminRoutes);
 app.use("/gate", gateRoutes);
 
 // ✅ Hardware endpoint
-app.use("/", hardwareRoutes);
 app.get("/", (req, res) => {
   res.send("✅ FocusDesk Backend Running");
 });
+
+app.use("/", hardwareRoutes);
+
 module.exports = app;

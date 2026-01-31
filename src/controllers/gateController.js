@@ -6,7 +6,6 @@ const AccessRequest = require("../models/AccessRequest");
 const verifyQR = async (req, res) => {
   try {
     const { qrToken, gateId } = req.body;
-
     if (!qrToken || !gateId) {
       return res.status(400).json({
         status: "DENY",

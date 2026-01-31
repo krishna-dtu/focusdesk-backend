@@ -8,5 +8,8 @@ const gateAuth = require("../middleware/gateAuth");
  * ✅ Gate Verification API
  */
 router.post("/verify", gateAuth, verifyQR);
+router.get("/verify", (req, res) => {
+  res.send("✅ Gate Verify Endpoint Live (POST only)");
+});
 
 module.exports = router;
