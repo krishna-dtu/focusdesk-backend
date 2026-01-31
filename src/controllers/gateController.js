@@ -5,7 +5,9 @@ const AccessRequest = require("../models/AccessRequest");
 
 const verifyQR = async (req, res) => {
   try {
-    const { qrToken, gateId } = req.body;
+    // ✅ FIX: req.body can be undefined from hardware requests
+    const body = req.body || {};
+    const { qrToken, gateId } = body;
 
     if (!qrToken || !gateId) {
       return res.status(400).json({
@@ -52,18 +54,9 @@ const verifyQR = async (req, res) => {
     }
 
     // ✅ QRPass must exist
-    let qrPass;
-    try {
-      qrPass = await QRPass.findOne({
-        where: { tokenId, passType },
-      });
-    } catch (dbErr) {
-      return res.status(500).json({
-        status: "DENY",
-        message: "DATABASE_NOT_CONNECTED",
-        error: dbErr.message,
-      });
-    }
+    const qrPass = await QRPass.findOne({
+      where: { tokenId, passType },
+    });
 
     if (!qrPass) {
       await ScanLog.create({
@@ -81,7 +74,7 @@ const verifyQR = async (req, res) => {
       });
     }
 
-    // ✅ Prevent Token Replay
+    // ✅ Prevent Token Replay (one-time token use)
     if (qrPass.used === true) {
       await ScanLog.create({
         requestId,
@@ -160,7 +153,7 @@ const verifyQR = async (req, res) => {
       message: passType === "IN" ? "ENTRY_GRANTED" : "EXIT_GRANTED",
     });
   } catch (err) {
-    console.log("VERIFY ERROR:", err);
+    console.log("VERIFY ERROR:", err.message);
 
     return res.status(500).json({
       status: "DENY",
