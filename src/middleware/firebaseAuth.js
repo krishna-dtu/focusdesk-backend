@@ -1,30 +1,25 @@
 const admin = require("../config/firebaseAdmin");
 
-const firebaseAuth = async (req, res, next) => {
+module.exports = async (req, res, next) => {
   try {
-    const header = req.headers.authorization;
+    const authHeader = req.headers.authorization;
 
-    if (!header || !header.startsWith("Bearer ")) {
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({
-        message: "No Firebase token provided",
+        message: "Missing Firebase token",
       });
     }
 
-    const token = header.split(" ")[1];
+    const token = authHeader.split(" ")[1];
 
-    const decodedUser = await admin.auth().verifyIdToken(token);
+    const decoded = await admin.auth().verifyIdToken(token);
 
-    req.user = decodedUser;
-
+    req.user = decoded;
     next();
-  } catch (err) {
-    console.log("❌ Firebase Auth Error:", err.message);
 
+  } catch (err) {
     return res.status(401).json({
       message: "Invalid or expired Firebase token",
-      error: err.message,
     });
   }
 };
-
-module.exports = firebaseAuth;
