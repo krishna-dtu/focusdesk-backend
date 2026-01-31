@@ -8,7 +8,10 @@ const hardwareRoutes = require("./routes/hardwareRoutes");
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: "*",
+}));
+
 
 // ✅ Parse JSON properly (ESP32 + Postman + Render safe)
 app.use(express.json({ limit: "1mb" }));
