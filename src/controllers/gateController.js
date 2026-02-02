@@ -13,6 +13,7 @@ const verifyQR = async (req, res) => {
       return res.status(400).json({
         status: "DENY",
         message: "qrToken and gateId required",
+        state: null,
       });
     }
 
@@ -24,6 +25,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "INVALID_SIGNATURE",
+        state: null,
       });
     }
 
@@ -33,6 +35,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "INVALID_QR_PAYLOAD",
+        state: null,
       });
     }
 
@@ -52,6 +55,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "QR_NOT_STARTED_YET",
+        state: null,
       });
     }
 
@@ -68,6 +72,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "QR_EXPIRED",
+        state: null,
       });
     }
 
@@ -89,6 +94,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "PASS_NOT_FOUND",
+        state: null,
       });
     }
 
@@ -99,6 +105,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "USER_NOT_FOUND",
+        state: null,
       });
     }
 
@@ -106,6 +113,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "NOT_APPROVED",
+        state: request.currentState,
       });
     }
 
@@ -115,6 +123,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "PASS_NOT_STARTED_YET",
+        state: request.currentState,
       });
     }
 
@@ -122,6 +131,7 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "PASS_EXPIRED",
+        state: request.currentState,
       });
     }
 
@@ -131,6 +141,7 @@ const verifyQR = async (req, res) => {
         return res.json({
           status: "DENY",
           message: "ALREADY_INSIDE",
+          state: request.currentState,
         });
       }
 
@@ -144,6 +155,7 @@ const verifyQR = async (req, res) => {
         return res.json({
           status: "DENY",
           message: "ALREADY_OUTSIDE",
+          state: request.currentState,
         });
       }
 
@@ -164,6 +176,7 @@ const verifyQR = async (req, res) => {
     return res.json({
       status: "ALLOW",
       message: passType === "IN" ? "ENTRY_GRANTED" : "EXIT_GRANTED",
+      state: request.currentState,
     });
   } catch (err) {
     console.log("VERIFY ERROR:", err.message);
@@ -171,6 +184,7 @@ const verifyQR = async (req, res) => {
     return res.status(500).json({
       status: "DENY",
       error: err.message,
+      state: null,
     });
   }
 };
