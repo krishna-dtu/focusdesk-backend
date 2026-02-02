@@ -27,7 +27,7 @@ const verifyQR = async (req, res) => {
       });
     }
 
-    const { tokenId, requestId, passType, validUntil } = decoded;
+    const { tokenId, requestId, passType, validFrom, validUntil } = decoded;
 
     if (!tokenId || !requestId || !passType) {
       return res.json({
@@ -36,8 +36,26 @@ const verifyQR = async (req, res) => {
       });
     }
 
-    // ✅ Expiry check
-    if (validUntil && new Date() > new Date(validUntil)) {
+    // ✅ Expiry check (JWT) - Check both validFrom and validUntil
+    const now = new Date();
+
+    if (validFrom && now < new Date(validFrom)) {
+      await ScanLog.create({
+        requestId,
+        tokenId,
+        passType,
+        gateId,
+        result: "DENY",
+        reason: "QR_NOT_STARTED_YET",
+      });
+
+      return res.json({
+        status: "DENY",
+        message: "QR_NOT_STARTED_YET",
+      });
+    }
+
+    if (validUntil && now > new Date(validUntil)) {
       await ScanLog.create({
         requestId,
         tokenId,
@@ -74,23 +92,6 @@ const verifyQR = async (req, res) => {
       });
     }
 
-    // ✅ Prevent Token Replay (one-time token use)
-    if (qrPass.used === true) {
-      await ScanLog.create({
-        requestId,
-        tokenId,
-        passType,
-        gateId,
-        result: "DENY",
-        reason: "TOKEN_ALREADY_USED",
-      });
-
-      return res.json({
-        status: "DENY",
-        message: "TOKEN_ALREADY_USED",
-      });
-    }
-
     // ✅ Fetch Access Request
     const request = await AccessRequest.findByPk(requestId);
 
@@ -105,6 +106,22 @@ const verifyQR = async (req, res) => {
       return res.json({
         status: "DENY",
         message: "NOT_APPROVED",
+      });
+    }
+
+    // ✅ NEW: Enforce Validity Start + End (User Selected) - using 'now' from JWT check above
+
+    if (request.validFrom && now < new Date(request.validFrom)) {
+      return res.json({
+        status: "DENY",
+        message: "PASS_NOT_STARTED_YET",
+      });
+    }
+
+    if (request.validUntil && now > new Date(request.validUntil)) {
+      return res.json({
+        status: "DENY",
+        message: "PASS_EXPIRED",
       });
     }
 
@@ -133,10 +150,6 @@ const verifyQR = async (req, res) => {
       request.currentState = "OUTSIDE";
       await request.save();
     }
-
-    // ✅ Mark QRPass as used
-    qrPass.used = true;
-    await qrPass.save();
 
     // ✅ Log scan
     await ScanLog.create({

@@ -18,6 +18,7 @@ const validateHardwareQR = async (req, res) => {
             return res.status(400).json({
                 access: false,
                 message: "Missing QR Data",
+                state: null,
             });
         }
 
@@ -29,6 +30,7 @@ const validateHardwareQR = async (req, res) => {
             return res.status(401).json({
                 access: false,
                 message: "Invalid QR",
+                state: null,
             });
         }
 
@@ -39,6 +41,7 @@ const validateHardwareQR = async (req, res) => {
             return res.status(401).json({
                 access: false,
                 message: "QR Expired",
+                state: null,
             });
         }
 
@@ -48,6 +51,7 @@ const validateHardwareQR = async (req, res) => {
             return res.status(401).json({
                 access: false,
                 message: "QR Not Found",
+                state: null,
             });
         }
 
@@ -57,6 +61,7 @@ const validateHardwareQR = async (req, res) => {
             return res.status(401).json({
                 access: false,
                 message: "User Not Found",
+                state: null,
             });
         }
 
@@ -68,6 +73,7 @@ const validateHardwareQR = async (req, res) => {
                 return res.status(401).json({
                     access: false,
                     message: "Already Inside",
+                    state: user.currentState,
                 });
             }
 
@@ -84,6 +90,7 @@ const validateHardwareQR = async (req, res) => {
             return res.status(200).json({
                 access: true,
                 message: "Welcome (Entry)",
+                state: user.currentState,
             });
         }
 
@@ -92,6 +99,7 @@ const validateHardwareQR = async (req, res) => {
                 return res.status(401).json({
                     access: false,
                     message: "Already Outside",
+                    state: user.currentState,
                 });
             }
 
@@ -108,12 +116,14 @@ const validateHardwareQR = async (req, res) => {
             return res.status(200).json({
                 access: true,
                 message: "Goodbye (Exit)",
+                state: user.currentState,
             });
         }
 
         return res.status(401).json({
             access: false,
             message: "Invalid Pass Type",
+            state: user.currentState,
         });
     } catch (err) {
         console.log("VALIDATE ERROR:", err);
@@ -122,6 +132,7 @@ const validateHardwareQR = async (req, res) => {
             access: false,
             message: "Server Error",
             error: err.message,
+            state: null,
         });
 
     }

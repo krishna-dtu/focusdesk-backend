@@ -1,10 +1,9 @@
 const AccessRequest = require("../models/AccessRequest");
 const QRPass = require("../models/QRPass");
+const ScanLog = require("../models/ScanLog");
 
 const { generateQRToken } = require("../services/qrService");
 const { generateQRImage } = require("../services/qrImageService");
-
-const moment = require("moment-timezone");
 
 /**
  * ✅ View all pending requests
@@ -26,86 +25,37 @@ const getPendingRequests = async (req, res) => {
 };
 
 /**
- * ✅ Approve request + Issue BOTH IN and OUT QR
+ * ✅ Approve request
+ * FIX: This function now strictly uses the database-stored validity dates.
  */
 const approveRequest = async (req, res) => {
   try {
     const { id } = req.params;
-
     const request = await AccessRequest.findByPk(id);
 
     if (!request) {
       return res.status(404).json({ message: "Request not found" });
     }
 
-    // ✅ Fetch existing passes
-    let passes = await QRPass.findAll({
-      where: { requestId: request.id },
-    });
-
-    /**
-     * ✅ CASE 1:
-     * Already Approved + Passes Exist (IN + OUT)
-     */
-    if (request.status === "APPROVED" && passes.length === 2) {
-      return res.json({
-        message: "✅ Already Approved. QR Exists",
-        request,
-        entryQR: passes.find((p) => p.passType === "IN"),
-        exitQR: passes.find((p) => p.passType === "OUT"),
-      });
+    // Check if already approved to avoid duplicate DB entries
+    if (request.status === "APPROVED") {
+      const existingPasses = await QRPass.findAll({ where: { requestId: request.id } });
+      if (existingPasses.length === 2) {
+        return res.json({ message: "Already Approved", request, passes: existingPasses });
+      }
     }
 
-    /**
-     * ✅ CASE 2:
-     * Approved but Passes Missing/Incomplete → REGENERATE CLEANLY
-     */
-    if (request.status === "APPROVED" && passes.length !== 2) {
-      console.log("⚠️ Incomplete QR passes found. Regenerating...");
-
-      // ✅ Delete old incomplete passes
-      await QRPass.destroy({
-        where: { requestId: request.id },
-      });
-
-      const inTok = generateQRToken(request, "IN");
-      const outTok = generateQRToken(request, "OUT");
-
-      const entryQR = await QRPass.create({
-        requestId: request.id,
-        passType: "IN",
-        tokenId: inTok.tokenId,
-        qrToken: inTok.token,
-      });
-
-      const exitQR = await QRPass.create({
-        requestId: request.id,
-        passType: "OUT",
-        tokenId: outTok.tokenId,
-        qrToken: outTok.token,
-      });
-
-      return res.json({
-        message: "✅ QR Pass Regenerated Successfully",
-        request,
-        entryQR,
-        exitQR,
-      });
-    }
-
-    /**
-     * ✅ CASE 3:
-     * Fresh Approval (Pending → Approved)
-     */
+    // ✅ UPDATE STATUS
     request.status = "APPROVED";
-    request.validFrom = moment().tz("Asia/Kolkata").toDate();
-    request.validUntil = moment().tz("Asia/Kolkata").add(24, "hours").toDate();
     request.rejectionReason = null;
     request.currentState = "OUTSIDE";
-
     await request.save();
 
-    // ✅ Generate Fresh QR Tokens
+    // ✅ IMPORTANT: Clear old passes if regenerating
+    await QRPass.destroy({ where: { requestId: request.id } });
+
+    // ✅ GENERATE TOKENS using the request object 
+    // (qrService.js will now read request.validFrom and request.validUntil)
     const inTok = generateQRToken(request, "IN");
     const outTok = generateQRToken(request, "OUT");
 
@@ -124,23 +74,19 @@ const approveRequest = async (req, res) => {
     });
 
     return res.json({
-      message: "✅ Request Approved + IN/OUT QR Issued",
+      message: "✅ Request Approved with User-Defined Validity",
       request,
       entryQR,
       exitQR,
     });
   } catch (err) {
-    console.log("❌ APPROVE ERROR:", err.message);
-
-    return res.status(500).json({
-      message: "Approval failed",
-      error: err.message,
-    });
+    console.error("❌ APPROVE ERROR:", err.message);
+    return res.status(500).json({ message: "Approval failed", error: err.message });
   }
 };
 
 /**
- * ✅ Reject request (Reason mandatory)
+ * ✅ Reject request
  */
 const rejectRequest = async (req, res) => {
   try {
@@ -166,7 +112,6 @@ const rejectRequest = async (req, res) => {
 
     await request.save();
 
-    // ✅ Delete QR passes
     await QRPass.destroy({ where: { requestId: request.id } });
 
     return res.json({
@@ -179,7 +124,7 @@ const rejectRequest = async (req, res) => {
 };
 
 /**
- * ✅ Get both IN and OUT QR Tokens (Admin View)
+ * ✅ Get QR Pass Tokens
  */
 const getQRPass = async (req, res) => {
   try {
@@ -205,7 +150,7 @@ const getQRPass = async (req, res) => {
 };
 
 /**
- * ✅ Get QR IMAGE for IN or OUT
+ * ✅ Get QR Image
  */
 const getQRImage = async (req, res) => {
   try {
@@ -236,7 +181,7 @@ const getQRImage = async (req, res) => {
 };
 
 /**
- * ✅ Get all approved users
+ * ✅ Get Approved Users
  */
 const getApprovedUsers = async (req, res) => {
   try {
@@ -254,6 +199,104 @@ const getApprovedUsers = async (req, res) => {
   }
 };
 
+/**
+ * ✅ Get Scan Logs for a User (Admin View Details)
+ */
+const getUserScanLogs = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const request = await AccessRequest.findByPk(id);
+
+    const logs = await ScanLog.findAll({
+      where: { requestId: id },
+      order: [["createdAt", "DESC"]],
+    });
+
+    return res.json({
+      user: request
+        ? {
+            id: request.id,
+            fullName: request.fullName,
+            idNumber: request.idNumber,
+            organisation: request.organisation,
+            validFrom: request.validFrom,
+            validUntil: request.validUntil,
+            status: request.status,
+          }
+        : null,
+      logs,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * ✅ Update validity dates for an approved user
+ */
+const updateUserValidity = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { validFrom, validUntil } = req.body;
+
+    if (!validFrom || !validUntil) {
+      return res.status(400).json({ message: "validFrom and validUntil are required" });
+    }
+
+    const fromDate = new Date(validFrom);
+    const untilDate = new Date(validUntil);
+
+    if (isNaN(fromDate.getTime()) || isNaN(untilDate.getTime())) {
+      return res.status(400).json({ message: "Invalid date format" });
+    }
+
+    if (fromDate >= untilDate) {
+      return res.status(400).json({ message: "validUntil must be after validFrom" });
+    }
+
+    const request = await AccessRequest.findByPk(id);
+
+    if (!request) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    request.validFrom = fromDate;
+    request.validUntil = untilDate;
+    await request.save();
+
+    // Regenerate QR tokens with new validity
+    await QRPass.destroy({ where: { requestId: request.id } });
+
+    const { generateQRToken } = require("../services/qrService");
+    const inTok = generateQRToken(request, "IN");
+    const outTok = generateQRToken(request, "OUT");
+
+    const entryQR = await QRPass.create({
+      requestId: request.id,
+      passType: "IN",
+      tokenId: inTok.tokenId,
+      qrToken: inTok.token,
+    });
+
+    const exitQR = await QRPass.create({
+      requestId: request.id,
+      passType: "OUT",
+      tokenId: outTok.tokenId,
+      qrToken: outTok.token,
+    });
+
+    return res.json({
+      message: "✅ Validity dates updated and QR regenerated",
+      request,
+      entryQR,
+      exitQR,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 module.exports = {
   getPendingRequests,
   approveRequest,
@@ -261,4 +304,6 @@ module.exports = {
   getQRPass,
   getQRImage,
   getApprovedUsers,
+  updateUserValidity,
+  getUserScanLogs,
 };

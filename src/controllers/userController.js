@@ -3,47 +3,65 @@ const QRPass = require("../models/QRPass");
 
 /**
  * ✅ User submits access request (Firebase Protected)
+ * Ensures user-selected dates are stored as proper Date objects
  */
 const submitAccessRequest = async (req, res) => {
   try {
-    const { fullName, idNumber, organisation } = req.body;
+    const { fullName, idNumber, organisation, validFrom, validUntil } = req.body;
 
+    // Basic validation
     if (!fullName || !idNumber || !organisation) {
-      return res.status(400).json({
-        message: "All fields are required",
-      });
+      return res.status(400).json({ message: "All fields are required" });
     }
 
-    // ✅ Enforce standard roll format (no slashes)
+    // Enforce standard roll format
     if (idNumber.includes("/")) {
-      return res.status(400).json({
-        message: "Roll number must not contain '/'",
-      });
+      return res.status(400).json({ message: "Roll number must not contain '/'" });
     }
 
-    // ✅ Must be logged in
+    // Authentication check
     if (!req.user || !req.user.uid) {
-      return res.status(401).json({
-        message: "Authentication required",
-      });
+      return res.status(401).json({ message: "Authentication required" });
     }
 
-    // ✅ Prevent duplicate requests
+    // Validity dates check
+    if (!validFrom || !validUntil) {
+      return res.status(400).json({ message: "Valid From and Valid Until are required" });
+    }
+
+    const fromDate = new Date(validFrom);
+    const untilDate = new Date(validUntil);
+    const now = new Date();
+
+    // Date logic validation
+    if (isNaN(fromDate.getTime()) || isNaN(untilDate.getTime())) {
+      return res.status(400).json({ message: "Invalid date format" });
+    }
+
+    if (fromDate >= untilDate) {
+      return res.status(400).json({ message: "Valid Until must be after Valid From" });
+    }
+
+    if (untilDate <= now) {
+      return res.status(400).json({ message: "Valid Until cannot be in the past" });
+    }
+
+    // Prevent duplicate requests
     const existing = await AccessRequest.findOne({ where: { idNumber } });
-
     if (existing) {
-      return res.status(409).json({
-        message: "Request already exists with this ID number",
-      });
+      return res.status(409).json({ message: "Request already exists with this ID number" });
     }
 
-    // ✅ Create request owned by Firebase UID
+    // ✅ Create request with stored validity window
     const request = await AccessRequest.create({
       fullName,
       idNumber,
       organisation,
+      validFrom: fromDate,
+      validUntil: untilDate,
       firebaseUid: req.user.uid,
       firebaseEmail: req.user.email || null,
+      status: "PENDING"
     });
 
     return res.status(201).json({
@@ -51,7 +69,7 @@ const submitAccessRequest = async (req, res) => {
       request,
     });
   } catch (err) {
-    console.log("❌ Error submitAccessRequest:", err.message);
+    console.error("❌ Error submitAccessRequest:", err.message);
     return res.status(500).json({
       message: "Server error",
       error: err.message,
@@ -60,38 +78,26 @@ const submitAccessRequest = async (req, res) => {
 };
 
 /**
- * ✅ User fetches BOTH QRs using ID Number (Secure Production API)
+ * ✅ User fetches BOTH QRs using ID Number
  */
 const getUserQRByIdNumber = async (req, res) => {
   try {
     const { idNumber } = req.params;
 
-    // ✅ Must be logged in
     if (!req.user || !req.user.uid) {
-      return res.status(401).json({
-        message: "Authentication required",
-      });
+      return res.status(401).json({ message: "Authentication required" });
     }
 
-    // ✅ Find request
-    const request = await AccessRequest.findOne({
-      where: { idNumber },
-    });
+    const request = await AccessRequest.findOne({ where: { idNumber } });
 
     if (!request) {
-      return res.status(404).json({
-        message: "No request found for this ID number",
-      });
+      return res.status(404).json({ message: "No request found for this ID number" });
     }
 
-    // ✅ Ownership check
     if (request.firebaseUid !== req.user.uid) {
-      return res.status(403).json({
-        message: "Unauthorized access",
-      });
+      return res.status(403).json({ message: "Unauthorized access" });
     }
 
-    // ✅ Not approved yet
     if (request.status !== "APPROVED") {
       return res.json({
         status: request.status,
@@ -100,10 +106,7 @@ const getUserQRByIdNumber = async (req, res) => {
       });
     }
 
-    // ✅ Fetch QR passes
-    const passes = await QRPass.findAll({
-      where: { requestId: request.id },
-    });
+    const passes = await QRPass.findAll({ where: { requestId: request.id } });
 
     return res.json({
       status: "APPROVED",
@@ -112,13 +115,11 @@ const getUserQRByIdNumber = async (req, res) => {
       organisation: request.organisation,
       validFrom: request.validFrom,
       validUntil: request.validUntil,
-
       entryQR: passes.find((p) => p.passType === "IN"),
       exitQR: passes.find((p) => p.passType === "OUT"),
     });
   } catch (err) {
-    console.log("❌ Error getUserQRByIdNumber:", err.message);
-
+    console.error("❌ Error getUserQRByIdNumber:", err.message);
     return res.status(500).json({
       message: "Server error",
       error: err.message,
