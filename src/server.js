@@ -3,6 +3,13 @@ require("dotenv").config();
 const app = require("./app");
 const { sequelize } = require("./config/db");
 
+// ✅ Import all models so Sequelize knows about them
+require("./models/AccessRequest");
+require("./models/QRPass");
+require("./models/ScanLog");
+require("./models/UserActivity");
+require("./models/QRRotation");
+
 const connectDB = async () => {
   try {
     await sequelize.authenticate();

@@ -1,9 +1,12 @@
 const AccessRequest = require("../models/AccessRequest");
 const QRPass = require("../models/QRPass");
 const ScanLog = require("../models/ScanLog");
+const UserActivity = require("../models/UserActivity");
 
 const { generateQRToken } = require("../services/qrService");
 const { generateQRImage } = require("../services/qrImageService");
+const { getContributionCalendar } = require("../services/activityService");
+const { Op } = require("sequelize");
 
 /**
  * ✅ View all pending requests
@@ -185,16 +188,29 @@ const getQRImage = async (req, res) => {
  */
 const getApprovedUsers = async (req, res) => {
   try {
+    console.log("📊 Fetching approved users...");
+    console.log(`📊 Table name: ${AccessRequest.tableName}`);
+    
+    // First, get all users to see if table has data
+    const allUsers = await AccessRequest.findAll({ limit: 5 });
+    console.log(`📊 Total users in table (first 5): ${allUsers.length}`);
+    if (allUsers.length > 0) {
+      console.log(`📊 Sample users:`, allUsers.map(u => ({ id: u.id, name: u.fullName, status: u.status })));
+    }
+    
     const approved = await AccessRequest.findAll({
       where: { status: "APPROVED" },
       order: [["updatedAt", "DESC"]],
     });
+
+    console.log(`✅ Found ${approved.length} approved users`);
 
     return res.json({
       count: approved.length,
       users: approved,
     });
   } catch (err) {
+    console.error("❌ Error in getApprovedUsers:", err);
     return res.status(500).json({ error: err.message });
   }
 };
@@ -297,6 +313,173 @@ const updateUserValidity = async (req, res) => {
   }
 };
 
+/**
+ * ✅ Get user profile with contribution calendar (Admin Read-Only)
+ */
+const getUserProfile = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await AccessRequest.findByPk(id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Get last 90 days of activity
+    const endDate = new Date().toISOString().split("T")[0];
+    const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0];
+
+    const calendar = await getContributionCalendar(id, startDate, endDate);
+
+    // Get recent scan logs
+    const recentLogs = await ScanLog.findAll({
+      where: { requestId: id },
+      order: [["createdAt", "DESC"]],
+      limit: 20,
+    });
+
+    // Calculate statistics
+    const totalDays = calendar.length;
+    const totalDuration = calendar.reduce((sum, day) => sum + day.totalDuration, 0);
+    const flaggedDays = calendar.filter((day) => day.isFlagged).length;
+
+    return res.json({
+      user: {
+        id: user.id,
+        fullName: user.fullName,
+        idNumber: user.idNumber,
+        organisation: user.organisation,
+        status: user.status,
+        validFrom: user.validFrom,
+        validUntil: user.validUntil,
+        currentState: user.currentState,
+      },
+      calendar,
+      recentLogs,
+      statistics: {
+        totalDays,
+        totalDuration,
+        flaggedDays,
+        averageDuration: totalDays > 0 ? Math.round(totalDuration / totalDays) : 0,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * ✅ Get contribution calendar for specific user (date range)
+ */
+const getUserContributionCalendar = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: "startDate and endDate required" });
+    }
+
+    const calendar = await getContributionCalendar(id, startDate, endDate);
+
+    return res.json({ calendar });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * ✅ Get all flagged activities (abuse monitoring)
+ */
+const getFlaggedActivities = async (req, res) => {
+  try {
+    const flagged = await UserActivity.findAll({
+      where: { isFlagged: true },
+      order: [["date", "DESC"]],
+      limit: 100,
+    });
+
+    // Enrich with user details
+    const requestIds = [...new Set(flagged.map((f) => f.requestId))];
+    const users = await AccessRequest.findAll({
+      where: { id: requestIds },
+    });
+
+    const userMap = {};
+    users.forEach((u) => {
+      userMap[u.id] = {
+        fullName: u.fullName,
+        idNumber: u.idNumber,
+        organisation: u.organisation,
+      };
+    });
+
+    const enriched = flagged.map((f) => ({
+      ...f.toJSON(),
+      user: userMap[f.requestId] || null,
+    }));
+
+    return res.json({ flagged: enriched });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * ✅ Get detailed daily logs for a user
+ */
+const getUserDailyLogs = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.query;
+
+    if (!date) {
+      return res.status(400).json({ message: "date parameter required (YYYY-MM-DD)" });
+    }
+
+    const user = await AccessRequest.findByPk(id);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Get activity for the day
+    const activity = await UserActivity.findOne({
+      where: { requestId: id, date },
+    });
+
+    // Get all scans for that day
+    const startOfDay = new Date(date);
+    const endOfDay = new Date(date);
+    endOfDay.setDate(endOfDay.getDate() + 1);
+
+    const logs = await ScanLog.findAll({
+      where: {
+        requestId: id,
+        createdAt: {
+          [Op.gte]: startOfDay,
+          [Op.lt]: endOfDay,
+        },
+      },
+      order: [["createdAt", "ASC"]],
+    });
+
+    return res.json({
+      user: {
+        fullName: user.fullName,
+        idNumber: user.idNumber,
+      },
+      date,
+      activity: activity || null,
+      logs,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 module.exports = {
   getPendingRequests,
   approveRequest,
@@ -306,4 +489,8 @@ module.exports = {
   getApprovedUsers,
   updateUserValidity,
   getUserScanLogs,
+  getUserProfile,
+  getUserContributionCalendar,
+  getFlaggedActivities,
+  getUserDailyLogs,
 };

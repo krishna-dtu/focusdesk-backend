@@ -2,6 +2,8 @@ const jwt = require("jsonwebtoken");
 const QRPass = require("../models/QRPass");
 const ScanLog = require("../models/ScanLog");
 const AccessRequest = require("../models/AccessRequest");
+const { updateUserActivity, checkAbusePattern } = require("../services/activityService");
+const { checkRestriction, recordScanAttempt, applyRestriction } = require("../services/qrRotationService");
 
 const verifyQR = async (req, res) => {
   try {
@@ -135,6 +137,45 @@ const verifyQR = async (req, res) => {
       });
     }
 
+    // ✅ CHECK FOR RESTRICTIONS (Anti-Abuse)
+    const restrictionCheck = await checkRestriction(requestId);
+    if (restrictionCheck.isRestricted) {
+      await ScanLog.create({
+        requestId,
+        tokenId,
+        passType,
+        gateId,
+        result: "DENY",
+        reason: "USER_RESTRICTED",
+      });
+
+      return res.json({
+        status: "DENY",
+        message: "USER_RESTRICTED",
+        restrictionUntil: restrictionCheck.until,
+        state: request.currentState,
+      });
+    }
+
+    // ✅ RECORD SCAN ATTEMPT
+    const scanAttempt = await recordScanAttempt(requestId);
+    if (scanAttempt.shouldRestrict) {
+      await ScanLog.create({
+        requestId,
+        tokenId,
+        passType,
+        gateId,
+        result: "DENY",
+        reason: "TOO_MANY_ATTEMPTS",
+      });
+
+      return res.json({
+        status: "DENY",
+        message: "TOO_MANY_ATTEMPTS",
+        state: request.currentState,
+      });
+    }
+
     // ✅ ENTRY
     if (passType === "IN") {
       if (request.currentState === "INSIDE") {
@@ -173,10 +214,20 @@ const verifyQR = async (req, res) => {
       reason: null,
     });
 
+    // ✅ UPDATE USER ACTIVITY
+    await updateUserActivity(requestId, passType);
+
+    // ✅ CHECK FOR ABUSE PATTERN
+    const abuseCheck = await checkAbusePattern(requestId);
+    if (abuseCheck.isAbuse) {
+      await applyRestriction(requestId, 15); // 15 minute restriction
+    }
+
     return res.json({
       status: "ALLOW",
       message: passType === "IN" ? "ENTRY_GRANTED" : "EXIT_GRANTED",
       state: request.currentState,
+      warning: abuseCheck.isAbuse ? "ABUSE_DETECTED" : null,
     });
   } catch (err) {
     console.log("VERIFY ERROR:", err.message);

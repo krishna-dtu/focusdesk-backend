@@ -10,6 +10,10 @@ const {
   getApprovedUsers,
   updateUserValidity,
   getUserScanLogs,
+  getUserProfile,
+  getUserContributionCalendar,
+  getFlaggedActivities,
+  getUserDailyLogs,
 } = require("../controllers/adminController");
 
 const { getAttendance } = require("../controllers/attendanceController");
@@ -36,5 +40,11 @@ router.get("/qrimage/:id/:type", getQRImage);
 
 // ✅ ATTENDANCE TRACKING
 router.get("/attendance", getAttendance);
+
+// ✅ USER PROFILE & ACTIVITY MONITORING
+router.get("/user-profile/:id", getUserProfile);
+router.get("/user-calendar/:id", getUserContributionCalendar);
+router.get("/user-daily-logs/:id", getUserDailyLogs);
+router.get("/flagged-activities", getFlaggedActivities);
 
 module.exports = router;

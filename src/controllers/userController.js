@@ -1,5 +1,7 @@
 const AccessRequest = require("../models/AccessRequest");
 const QRPass = require("../models/QRPass");
+const { getContributionCalendar } = require("../services/activityService");
+const { getActiveQRType, checkRestriction } = require("../services/qrRotationService");
 
 /**
  * ✅ User submits access request (Firebase Protected)
@@ -17,11 +19,6 @@ const submitAccessRequest = async (req, res) => {
     // Enforce standard roll format
     if (idNumber.includes("/")) {
       return res.status(400).json({ message: "Roll number must not contain '/'" });
-    }
-
-    // Authentication check
-    if (!req.user || !req.user.uid) {
-      return res.status(401).json({ message: "Authentication required" });
     }
 
     // Validity dates check
@@ -53,14 +50,15 @@ const submitAccessRequest = async (req, res) => {
     }
 
     // ✅ Create request with stored validity window
+    // Firebase auth is optional - users can submit before logging in
     const request = await AccessRequest.create({
       fullName,
       idNumber,
       organisation,
       validFrom: fromDate,
       validUntil: untilDate,
-      firebaseUid: req.user.uid,
-      firebaseEmail: req.user.email || null,
+      firebaseUid: req.user?.uid || null,
+      firebaseEmail: req.user?.email || null,
       status: "PENDING"
     });
 
@@ -127,7 +125,212 @@ const getUserQRByIdNumber = async (req, res) => {
   }
 };
 
+/**
+ * ✅ Get user's own contribution calendar
+ */
+const getMyContributionCalendar = async (req, res) => {
+  try {
+    const { idNumber } = req.params;
+
+    if (!req.user || !req.user.uid) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+
+    const request = await AccessRequest.findOne({ where: { idNumber } });
+
+    if (!request) {
+      return res.status(404).json({ message: "No request found" });
+    }
+
+    if (request.firebaseUid !== req.user.uid) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    // Get last 90 days
+    const endDate = new Date().toISOString().split("T")[0];
+    const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split("T")[0];
+
+    const calendar = await getContributionCalendar(request.id, startDate, endDate);
+
+    const totalDays = calendar.length;
+    const totalDuration = calendar.reduce((sum, day) => sum + day.totalDuration, 0);
+
+    return res.json({
+      calendar,
+      statistics: {
+        totalDays,
+        totalDuration,
+        averageDuration: totalDays > 0 ? Math.round(totalDuration / totalDays) : 0,
+      },
+    });
+  } catch (err) {
+    console.error("Calendar fetch error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * ✅ Get active QR type (for dynamic rotation)
+ */
+const getActiveQR = async (req, res) => {
+  try {
+    const { idNumber } = req.params;
+
+    if (!req.user || !req.user.uid) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+
+    const request = await AccessRequest.findOne({ where: { idNumber } });
+
+    if (!request) {
+      return res.status(404).json({ message: "No request found" });
+    }
+
+    if (request.firebaseUid !== req.user.uid) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    if (request.status !== "APPROVED") {
+      return res.json({
+        status: request.status,
+        message: "Not approved yet",
+      });
+    }
+
+    // Check for restrictions
+    const restrictionCheck = await checkRestriction(request.id);
+    if (restrictionCheck.isRestricted) {
+      return res.json({
+        status: "RESTRICTED",
+        message: "Temporarily restricted due to abuse detection",
+        restrictionUntil: restrictionCheck.until,
+      });
+    }
+
+    // Get active QR type
+    const rotation = await getActiveQRType(request.id);
+
+    // Get the appropriate QR pass
+    const passes = await QRPass.findAll({ where: { requestId: request.id } });
+    const activePass = passes.find((p) => p.passType === rotation.activeQRType);
+
+    return res.json({
+      status: "APPROVED",
+      activeQRType: rotation.activeQRType,
+      qrToken: activePass?.qrToken,
+      rotationTimestamp: rotation.rotationTimestamp,
+      currentState: request.currentState,
+    });
+  } catch (err) {
+    console.error("Active QR fetch error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * ✅ Get user's own profile
+ */
+const getMyProfile = async (req, res) => {
+  try {
+    const { idNumber } = req.params;
+
+    if (!req.user || !req.user.uid) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+
+    const request = await AccessRequest.findOne({ where: { idNumber } });
+
+    if (!request) {
+      return res.status(404).json({ message: "Profile not found" });
+    }
+
+    if (request.firebaseUid !== req.user.uid) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    return res.json({
+      profile: {
+        id: request.id,
+        fullName: request.fullName,
+        idNumber: request.idNumber,
+        organisation: request.organisation,
+        profilePicture: request.profilePicture,
+        phoneNumber: request.phoneNumber,
+        email: request.email,
+        department: request.department,
+        year: request.year,
+        bio: request.bio,
+        status: request.status,
+        validFrom: request.validFrom,
+        validUntil: request.validUntil,
+      },
+    });
+  } catch (err) {
+    console.error("Profile fetch error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * ✅ Update user's own profile
+ */
+const updateMyProfile = async (req, res) => {
+  try {
+    const { idNumber } = req.params;
+    const { profilePicture, phoneNumber, email, department, year, bio } = req.body;
+
+    if (!req.user || !req.user.uid) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+
+    const request = await AccessRequest.findOne({ where: { idNumber } });
+
+    if (!request) {
+      return res.status(404).json({ message: "Profile not found" });
+    }
+
+    if (request.firebaseUid !== req.user.uid) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    // Update only allowed fields
+    if (profilePicture !== undefined) request.profilePicture = profilePicture;
+    if (phoneNumber !== undefined) request.phoneNumber = phoneNumber;
+    if (email !== undefined) request.email = email;
+    if (department !== undefined) request.department = department;
+    if (year !== undefined) request.year = year;
+    if (bio !== undefined) request.bio = bio;
+
+    await request.save();
+
+    return res.json({
+      message: "Profile updated successfully",
+      profile: {
+        id: request.id,
+        fullName: request.fullName,
+        idNumber: request.idNumber,
+        organisation: request.organisation,
+        profilePicture: request.profilePicture,
+        phoneNumber: request.phoneNumber,
+        email: request.email,
+        department: request.department,
+        year: request.year,
+        bio: request.bio,
+      },
+    });
+  } catch (err) {
+    console.error("Profile update error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 module.exports = {
   submitAccessRequest,
   getUserQRByIdNumber,
+  getMyContributionCalendar,
+  getActiveQR,
+  getMyProfile,
+  updateMyProfile,
 };
