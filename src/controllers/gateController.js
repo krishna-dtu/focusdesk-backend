@@ -80,7 +80,8 @@ const verifyQR = async (req, res) => {
 
     // ✅ QRPass must exist
     const qrPass = await QRPass.findOne({
-      where: { tokenId, passType },
+      tokenId,
+      passType,
     });
 
     if (!qrPass) {
@@ -101,7 +102,7 @@ const verifyQR = async (req, res) => {
     }
 
     // ✅ Fetch Access Request
-    const request = await AccessRequest.findByPk(requestId);
+    const request = await AccessRequest.findById(requestId);
 
     if (!request) {
       return res.json({
@@ -220,7 +221,7 @@ const verifyQR = async (req, res) => {
     // ✅ CHECK FOR ABUSE PATTERN
     const abuseCheck = await checkAbusePattern(requestId);
     if (abuseCheck.isAbuse) {
-      await applyRestriction(requestId, 15); // 15 minute restriction
+      await applyRestriction(requestId); // No hardcoded duration
     }
 
     return res.json({

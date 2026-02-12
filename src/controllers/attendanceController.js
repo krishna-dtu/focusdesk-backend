@@ -1,13 +1,12 @@
 const ScanLog = require("../models/ScanLog");
 const AccessRequest = require("../models/AccessRequest");
+const UserActivity = require("../models/UserActivity");
 
 const getAttendance = async (req, res) => {
   try {
     console.log("📊 Fetching attendance logs...");
     
-    const logs = await ScanLog.findAll({
-      order: [["createdAt", "ASC"]],
-    });
+    const logs = await ScanLog.find().sort({ createdAt: 1 });
 
     console.log(`✅ Found ${logs.length} scan logs`);
 
@@ -19,8 +18,9 @@ const getAttendance = async (req, res) => {
     const attendanceMap = {};
 
     logs.forEach((log) => {
-      if (!attendanceMap[log.requestId]) {
-        attendanceMap[log.requestId] = {
+      const reqId = log.requestId.toString();
+      if (!attendanceMap[reqId]) {
+        attendanceMap[reqId] = {
           requestId: log.requestId,
           firstIn: null,
           lastOut: null,
@@ -29,48 +29,57 @@ const getAttendance = async (req, res) => {
       }
 
       if (log.passType === "IN") {
-        if (!attendanceMap[log.requestId].firstIn) {
-          attendanceMap[log.requestId].firstIn = log.createdAt;
+        if (!attendanceMap[reqId].firstIn) {
+          attendanceMap[reqId].firstIn = log.createdAt;
         }
       }
 
       if (log.passType === "OUT") {
-        attendanceMap[log.requestId].lastOut = log.createdAt;
-        attendanceMap[log.requestId].breaks += 1;
+        attendanceMap[reqId].lastOut = log.createdAt;
+        attendanceMap[reqId].breaks += 1;
       }
     });
 
     // ✅ Fetch User Details from AccessRequest table
-    const requestIds = Object.keys(attendanceMap).map(id => parseInt(id));
+    const requestIds = Object.keys(attendanceMap).map(id => id);
     console.log(`📋 Fetching user details for request IDs:`, requestIds);
 
-    const users = await AccessRequest.findAll({
-      where: { id: requestIds },
-    });
+    const users = await AccessRequest.find({ _id: { $in: requestIds } });
 
     console.log(`✅ Found ${users.length} users`);
-    
-    // Debug: Log table name being used
-    console.log(`📊 Table name: ${AccessRequest.tableName}`);
-    
-    // Debug: Try to get all users to see if table has data
-    const allUsers = await AccessRequest.findAll({ limit: 5 });
-    console.log(`📊 Total users in table (first 5):`, allUsers.length);
-    if (allUsers.length > 0) {
-      console.log(`📊 Sample user IDs:`, allUsers.map(u => u.id));
-    }
+
+    // ✅ Check for flagged activities today
+    const today = new Date().toISOString().split("T")[0];
+    const flaggedActivities = await UserActivity.find({
+      requestId: { $in: requestIds },
+      date: today,
+      isFlagged: true,
+    });
+
+    const flaggedMap = {};
+    flaggedActivities.forEach((activity) => {
+      flaggedMap[activity.requestId.toString()] = {
+        isFlagged: true,
+        flagReason: activity.flagReason,
+      };
+    });
 
     // ✅ Merge user info into attendance
     const finalData = users.map((user) => {
+      const userId = user._id.toString();
       return {
-        requestId: user.id,
+        requestId: user._id,
         fullName: user.fullName,
         idNumber: user.idNumber,
         organisation: user.organisation,
 
-        firstIn: attendanceMap[user.id].firstIn,
-        lastOut: attendanceMap[user.id].lastOut,
-        breaks: attendanceMap[user.id].breaks,
+        firstIn: attendanceMap[userId].firstIn,
+        lastOut: attendanceMap[userId].lastOut,
+        breaks: attendanceMap[userId].breaks,
+        
+        // ✅ Add flagged status
+        isFlagged: flaggedMap[userId]?.isFlagged || false,
+        flagReason: flaggedMap[userId]?.flagReason || null,
       };
     });
 

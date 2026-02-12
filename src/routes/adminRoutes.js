@@ -18,6 +18,12 @@ const {
 
 const { getAttendance } = require("../controllers/attendanceController");
 
+const {
+  getRestrictionSettings,
+  updateRestrictionSettings,
+  getSystemSettings,
+} = require("../controllers/settingsController");
+
 // Requests
 router.get("/requests", getPendingRequests);
 router.get("/approved", getApprovedUsers);
@@ -46,5 +52,10 @@ router.get("/user-profile/:id", getUserProfile);
 router.get("/user-calendar/:id", getUserContributionCalendar);
 router.get("/user-daily-logs/:id", getUserDailyLogs);
 router.get("/flagged-activities", getFlaggedActivities);
+
+// ✅ SYSTEM SETTINGS (Admin Configuration)
+router.get("/settings/restriction", getRestrictionSettings);
+router.put("/settings/restriction", updateRestrictionSettings);
+router.get("/settings", getSystemSettings);
 
 module.exports = router;

@@ -1,6 +1,5 @@
 const UserActivity = require("../models/UserActivity");
 const ScanLog = require("../models/ScanLog");
-const { Op } = require("sequelize");
 
 /**
  * Update user activity after each scan
@@ -10,7 +9,8 @@ const updateUserActivity = async (requestId, passType) => {
     const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
 
     let activity = await UserActivity.findOne({
-      where: { requestId, date: today },
+      requestId,
+      date: today,
     });
 
     if (!activity) {
@@ -53,15 +53,13 @@ const updateUserActivity = async (requestId, passType) => {
  */
 const getContributionCalendar = async (requestId, startDate, endDate) => {
   try {
-    const activities = await UserActivity.findAll({
-      where: {
-        requestId,
-        date: {
-          [Op.between]: [startDate, endDate],
-        },
+    const activities = await UserActivity.find({
+      requestId,
+      date: {
+        $gte: startDate,
+        $lte: endDate,
       },
-      order: [["date", "ASC"]],
-    });
+    }).sort({ date: 1 });
 
     return activities;
   } catch (err) {
@@ -77,27 +75,26 @@ const checkAbusePattern = async (requestId) => {
   try {
     const oneMinuteAgo = new Date(Date.now() - 60000);
 
-    const recentScans = await ScanLog.count({
-      where: {
-        requestId,
-        createdAt: {
-          [Op.gte]: oneMinuteAgo,
-        },
-        result: "ALLOW",
+    const recentScans = await ScanLog.countDocuments({
+      requestId,
+      createdAt: {
+        $gte: oneMinuteAgo,
       },
+      result: "ALLOW",
     });
 
-    // Flag if more than 2 successful scans in 1 minute
-    if (recentScans > 2) {
+    // ✅ Flag if more than 1 successful scan in 1 minute (IN then OUT or OUT then IN)
+    if (recentScans > 1) {
       const today = new Date().toISOString().split("T")[0];
       
       const activity = await UserActivity.findOne({
-        where: { requestId, date: today },
+        requestId,
+        date: today,
       });
 
       if (activity) {
         activity.isFlagged = true;
-        activity.flagReason = `${recentScans} scans within 1 minute`;
+        activity.flagReason = `${recentScans} scans within 1 minute - Possible proxy attendance`;
         await activity.save();
       }
 

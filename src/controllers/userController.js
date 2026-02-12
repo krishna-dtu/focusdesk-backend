@@ -44,7 +44,7 @@ const submitAccessRequest = async (req, res) => {
     }
 
     // Prevent duplicate requests
-    const existing = await AccessRequest.findOne({ where: { idNumber } });
+    const existing = await AccessRequest.findOne({ idNumber });
     if (existing) {
       return res.status(409).json({ message: "Request already exists with this ID number" });
     }
@@ -86,14 +86,22 @@ const getUserQRByIdNumber = async (req, res) => {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const request = await AccessRequest.findOne({ where: { idNumber } });
+    const request = await AccessRequest.findOne({ idNumber });
 
     if (!request) {
       return res.status(404).json({ message: "No request found for this ID number" });
     }
 
+    // ✅ Link Firebase UID if not already linked
+    if (!request.firebaseUid) {
+      request.firebaseUid = req.user.uid;
+      request.firebaseEmail = req.user.email;
+      await request.save();
+    }
+
+    // ✅ Check if Firebase UID matches
     if (request.firebaseUid !== req.user.uid) {
-      return res.status(403).json({ message: "Unauthorized access" });
+      return res.status(403).json({ message: "This ID is registered to another account" });
     }
 
     if (request.status !== "APPROVED") {
@@ -104,7 +112,11 @@ const getUserQRByIdNumber = async (req, res) => {
       });
     }
 
-    const passes = await QRPass.findAll({ where: { requestId: request.id } });
+    const passes = await QRPass.find({ requestId: request._id });
+
+    // ✅ Return only the active QR based on currentState
+    const activeQRType = request.currentState === "OUTSIDE" ? "IN" : "OUT";
+    const activePass = passes.find((p) => p.passType === activeQRType);
 
     return res.json({
       status: "APPROVED",
@@ -113,6 +125,10 @@ const getUserQRByIdNumber = async (req, res) => {
       organisation: request.organisation,
       validFrom: request.validFrom,
       validUntil: request.validUntil,
+      currentState: request.currentState,
+      activeQRType: activeQRType,
+      activeQR: activePass,
+      // Still send both for backward compatibility
       entryQR: passes.find((p) => p.passType === "IN"),
       exitQR: passes.find((p) => p.passType === "OUT"),
     });
@@ -136,7 +152,7 @@ const getMyContributionCalendar = async (req, res) => {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const request = await AccessRequest.findOne({ where: { idNumber } });
+    const request = await AccessRequest.findOne({ idNumber });
 
     if (!request) {
       return res.status(404).json({ message: "No request found" });
@@ -152,7 +168,7 @@ const getMyContributionCalendar = async (req, res) => {
       .toISOString()
       .split("T")[0];
 
-    const calendar = await getContributionCalendar(request.id, startDate, endDate);
+    const calendar = await getContributionCalendar(request._id.toString(), startDate, endDate);
 
     const totalDays = calendar.length;
     const totalDuration = calendar.reduce((sum, day) => sum + day.totalDuration, 0);
@@ -182,7 +198,7 @@ const getActiveQR = async (req, res) => {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const request = await AccessRequest.findOne({ where: { idNumber } });
+    const request = await AccessRequest.findOne({ idNumber });
 
     if (!request) {
       return res.status(404).json({ message: "No request found" });
@@ -200,7 +216,7 @@ const getActiveQR = async (req, res) => {
     }
 
     // Check for restrictions
-    const restrictionCheck = await checkRestriction(request.id);
+    const restrictionCheck = await checkRestriction(request._id.toString());
     if (restrictionCheck.isRestricted) {
       return res.json({
         status: "RESTRICTED",
@@ -210,10 +226,10 @@ const getActiveQR = async (req, res) => {
     }
 
     // Get active QR type
-    const rotation = await getActiveQRType(request.id);
+    const rotation = await getActiveQRType(request._id.toString());
 
     // Get the appropriate QR pass
-    const passes = await QRPass.findAll({ where: { requestId: request.id } });
+    const passes = await QRPass.find({ requestId: request._id });
     const activePass = passes.find((p) => p.passType === rotation.activeQRType);
 
     return res.json({
@@ -240,7 +256,7 @@ const getMyProfile = async (req, res) => {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const request = await AccessRequest.findOne({ where: { idNumber } });
+    const request = await AccessRequest.findOne({ idNumber });
 
     if (!request) {
       return res.status(404).json({ message: "Profile not found" });
@@ -252,7 +268,7 @@ const getMyProfile = async (req, res) => {
 
     return res.json({
       profile: {
-        id: request.id,
+        id: request._id,
         fullName: request.fullName,
         idNumber: request.idNumber,
         organisation: request.organisation,
@@ -285,7 +301,7 @@ const updateMyProfile = async (req, res) => {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const request = await AccessRequest.findOne({ where: { idNumber } });
+    const request = await AccessRequest.findOne({ idNumber });
 
     if (!request) {
       return res.status(404).json({ message: "Profile not found" });
@@ -308,7 +324,7 @@ const updateMyProfile = async (req, res) => {
     return res.json({
       message: "Profile updated successfully",
       profile: {
-        id: request.id,
+        id: request._id,
         fullName: request.fullName,
         idNumber: request.idNumber,
         organisation: request.organisation,

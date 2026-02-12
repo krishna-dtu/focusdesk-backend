@@ -1,34 +1,34 @@
 const QRRotation = require("../models/QRRotation");
 const AccessRequest = require("../models/AccessRequest");
+const { getRestrictionDuration } = require("./settingsService");
 
 /**
- * Get or create QR rotation state for a user
+ * Get active QR type based on user's current state (NOT time-based)
  */
 const getActiveQRType = async (requestId) => {
   try {
-    const request = await AccessRequest.findByPk(requestId);
+    const request = await AccessRequest.findById(requestId);
     if (!request) {
       throw new Error("User not found");
     }
 
-    let rotation = await QRRotation.findOne({ where: { requestId } });
+    // ✅ QR type is based on current state, not time
+    // If user is OUTSIDE, show IN QR
+    // If user is INSIDE, show OUT QR
+    const activeQRType = request.currentState === "OUTSIDE" ? "IN" : "OUT";
+
+    let rotation = await QRRotation.findOne({ requestId });
 
     if (!rotation) {
-      // Create initial rotation based on current state
+      // Create initial rotation
       rotation = await QRRotation.create({
         requestId,
-        activeQRType: request.currentState === "OUTSIDE" ? "IN" : "OUT",
+        activeQRType: activeQRType,
         rotationTimestamp: new Date(),
       });
-    }
-
-    // Check if rotation needs update (every 30 seconds)
-    const timeSinceRotation = Date.now() - new Date(rotation.rotationTimestamp).getTime();
-    const ROTATION_INTERVAL = 30000; // 30 seconds
-
-    if (timeSinceRotation > ROTATION_INTERVAL) {
-      // Flip QR type
-      rotation.activeQRType = rotation.activeQRType === "IN" ? "OUT" : "IN";
+    } else {
+      // Update active QR type based on current state
+      rotation.activeQRType = activeQRType;
       rotation.rotationTimestamp = new Date();
       await rotation.save();
     }
@@ -45,7 +45,7 @@ const getActiveQRType = async (requestId) => {
  */
 const checkRestriction = async (requestId) => {
   try {
-    const rotation = await QRRotation.findOne({ where: { requestId } });
+    const rotation = await QRRotation.findOne({ requestId });
 
     if (!rotation) {
       return { isRestricted: false };
@@ -75,10 +75,14 @@ const checkRestriction = async (requestId) => {
 
 /**
  * Apply restriction for abuse
+ * Duration is fetched from system settings (no hardcoded value)
  */
-const applyRestriction = async (requestId, durationMinutes = 15) => {
+const applyRestriction = async (requestId) => {
   try {
-    let rotation = await QRRotation.findOne({ where: { requestId } });
+    // Fetch dynamic restriction duration from settings
+    const durationMinutes = await getRestrictionDuration();
+
+    let rotation = await QRRotation.findOne({ requestId });
 
     if (!rotation) {
       rotation = await QRRotation.create({
@@ -103,7 +107,7 @@ const applyRestriction = async (requestId, durationMinutes = 15) => {
  */
 const recordScanAttempt = async (requestId) => {
   try {
-    let rotation = await QRRotation.findOne({ where: { requestId } });
+    let rotation = await QRRotation.findOne({ requestId });
 
     if (!rotation) {
       rotation = await QRRotation.create({
@@ -127,7 +131,7 @@ const recordScanAttempt = async (requestId) => {
 
     // Apply restriction if too many attempts
     if (rotation.scanAttempts > 3) {
-      await applyRestriction(requestId, 15);
+      await applyRestriction(requestId);
       return { shouldRestrict: true, attempts: rotation.scanAttempts };
     }
 

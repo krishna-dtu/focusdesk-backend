@@ -6,17 +6,14 @@ const UserActivity = require("../models/UserActivity");
 const { generateQRToken } = require("../services/qrService");
 const { generateQRImage } = require("../services/qrImageService");
 const { getContributionCalendar } = require("../services/activityService");
-const { Op } = require("sequelize");
 
 /**
  * ✅ View all pending requests
  */
 const getPendingRequests = async (req, res) => {
   try {
-    const pending = await AccessRequest.findAll({
-      where: { status: "PENDING" },
-      order: [["createdAt", "DESC"]],
-    });
+    const pending = await AccessRequest.find({ status: "PENDING" })
+      .sort({ createdAt: -1 });
 
     return res.json({
       count: pending.length,
@@ -34,7 +31,7 @@ const getPendingRequests = async (req, res) => {
 const approveRequest = async (req, res) => {
   try {
     const { id } = req.params;
-    const request = await AccessRequest.findByPk(id);
+    const request = await AccessRequest.findById(id);
 
     if (!request) {
       return res.status(404).json({ message: "Request not found" });
@@ -42,7 +39,7 @@ const approveRequest = async (req, res) => {
 
     // Check if already approved to avoid duplicate DB entries
     if (request.status === "APPROVED") {
-      const existingPasses = await QRPass.findAll({ where: { requestId: request.id } });
+      const existingPasses = await QRPass.find({ requestId: request._id });
       if (existingPasses.length === 2) {
         return res.json({ message: "Already Approved", request, passes: existingPasses });
       }
@@ -55,7 +52,7 @@ const approveRequest = async (req, res) => {
     await request.save();
 
     // ✅ IMPORTANT: Clear old passes if regenerating
-    await QRPass.destroy({ where: { requestId: request.id } });
+    await QRPass.deleteMany({ requestId: request._id });
 
     // ✅ GENERATE TOKENS using the request object 
     // (qrService.js will now read request.validFrom and request.validUntil)
@@ -63,14 +60,14 @@ const approveRequest = async (req, res) => {
     const outTok = generateQRToken(request, "OUT");
 
     const entryQR = await QRPass.create({
-      requestId: request.id,
+      requestId: request._id,
       passType: "IN",
       tokenId: inTok.tokenId,
       qrToken: inTok.token,
     });
 
     const exitQR = await QRPass.create({
-      requestId: request.id,
+      requestId: request._id,
       passType: "OUT",
       tokenId: outTok.tokenId,
       qrToken: outTok.token,
@@ -102,7 +99,7 @@ const rejectRequest = async (req, res) => {
       });
     }
 
-    const request = await AccessRequest.findByPk(id);
+    const request = await AccessRequest.findById(id);
 
     if (!request) {
       return res.status(404).json({ message: "Request not found" });
@@ -115,7 +112,7 @@ const rejectRequest = async (req, res) => {
 
     await request.save();
 
-    await QRPass.destroy({ where: { requestId: request.id } });
+    await QRPass.deleteMany({ requestId: request._id });
 
     return res.json({
       message: "❌ Request Rejected",
@@ -133,9 +130,7 @@ const getQRPass = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const passes = await QRPass.findAll({
-      where: { requestId: id },
-    });
+    const passes = await QRPass.find({ requestId: id });
 
     if (!passes.length) {
       return res.status(404).json({
@@ -160,10 +155,8 @@ const getQRImage = async (req, res) => {
     const { id, type } = req.params;
 
     const qrPass = await QRPass.findOne({
-      where: {
-        requestId: id,
-        passType: type.toUpperCase(),
-      },
+      requestId: id,
+      passType: type.toUpperCase(),
     });
 
     if (!qrPass) {
@@ -189,19 +182,9 @@ const getQRImage = async (req, res) => {
 const getApprovedUsers = async (req, res) => {
   try {
     console.log("📊 Fetching approved users...");
-    console.log(`📊 Table name: ${AccessRequest.tableName}`);
     
-    // First, get all users to see if table has data
-    const allUsers = await AccessRequest.findAll({ limit: 5 });
-    console.log(`📊 Total users in table (first 5): ${allUsers.length}`);
-    if (allUsers.length > 0) {
-      console.log(`📊 Sample users:`, allUsers.map(u => ({ id: u.id, name: u.fullName, status: u.status })));
-    }
-    
-    const approved = await AccessRequest.findAll({
-      where: { status: "APPROVED" },
-      order: [["updatedAt", "DESC"]],
-    });
+    const approved = await AccessRequest.find({ status: "APPROVED" })
+      .sort({ updatedAt: -1 });
 
     console.log(`✅ Found ${approved.length} approved users`);
 
@@ -222,17 +205,15 @@ const getUserScanLogs = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const request = await AccessRequest.findByPk(id);
+    const request = await AccessRequest.findById(id);
 
-    const logs = await ScanLog.findAll({
-      where: { requestId: id },
-      order: [["createdAt", "DESC"]],
-    });
+    const logs = await ScanLog.find({ requestId: id })
+      .sort({ createdAt: -1 });
 
     return res.json({
       user: request
         ? {
-            id: request.id,
+            id: request._id,
             fullName: request.fullName,
             idNumber: request.idNumber,
             organisation: request.organisation,
@@ -271,7 +252,7 @@ const updateUserValidity = async (req, res) => {
       return res.status(400).json({ message: "validUntil must be after validFrom" });
     }
 
-    const request = await AccessRequest.findByPk(id);
+    const request = await AccessRequest.findById(id);
 
     if (!request) {
       return res.status(404).json({ message: "User not found" });
@@ -282,21 +263,21 @@ const updateUserValidity = async (req, res) => {
     await request.save();
 
     // Regenerate QR tokens with new validity
-    await QRPass.destroy({ where: { requestId: request.id } });
+    await QRPass.deleteMany({ requestId: request._id });
 
     const { generateQRToken } = require("../services/qrService");
     const inTok = generateQRToken(request, "IN");
     const outTok = generateQRToken(request, "OUT");
 
     const entryQR = await QRPass.create({
-      requestId: request.id,
+      requestId: request._id,
       passType: "IN",
       tokenId: inTok.tokenId,
       qrToken: inTok.token,
     });
 
     const exitQR = await QRPass.create({
-      requestId: request.id,
+      requestId: request._id,
       passType: "OUT",
       tokenId: outTok.tokenId,
       qrToken: outTok.token,
@@ -320,7 +301,7 @@ const getUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const user = await AccessRequest.findByPk(id);
+    const user = await AccessRequest.findById(id);
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -335,11 +316,9 @@ const getUserProfile = async (req, res) => {
     const calendar = await getContributionCalendar(id, startDate, endDate);
 
     // Get recent scan logs
-    const recentLogs = await ScanLog.findAll({
-      where: { requestId: id },
-      order: [["createdAt", "DESC"]],
-      limit: 20,
-    });
+    const recentLogs = await ScanLog.find({ requestId: id })
+      .sort({ createdAt: -1 })
+      .limit(20);
 
     // Calculate statistics
     const totalDays = calendar.length;
@@ -348,7 +327,7 @@ const getUserProfile = async (req, res) => {
 
     return res.json({
       user: {
-        id: user.id,
+        id: user._id,
         fullName: user.fullName,
         idNumber: user.idNumber,
         organisation: user.organisation,
@@ -396,21 +375,17 @@ const getUserContributionCalendar = async (req, res) => {
  */
 const getFlaggedActivities = async (req, res) => {
   try {
-    const flagged = await UserActivity.findAll({
-      where: { isFlagged: true },
-      order: [["date", "DESC"]],
-      limit: 100,
-    });
+    const flagged = await UserActivity.find({ isFlagged: true })
+      .sort({ date: -1 })
+      .limit(100);
 
     // Enrich with user details
-    const requestIds = [...new Set(flagged.map((f) => f.requestId))];
-    const users = await AccessRequest.findAll({
-      where: { id: requestIds },
-    });
+    const requestIds = [...new Set(flagged.map((f) => f.requestId.toString()))];
+    const users = await AccessRequest.find({ _id: { $in: requestIds } });
 
     const userMap = {};
     users.forEach((u) => {
-      userMap[u.id] = {
+      userMap[u._id.toString()] = {
         fullName: u.fullName,
         idNumber: u.idNumber,
         organisation: u.organisation,
@@ -419,7 +394,7 @@ const getFlaggedActivities = async (req, res) => {
 
     const enriched = flagged.map((f) => ({
       ...f.toJSON(),
-      user: userMap[f.requestId] || null,
+      user: userMap[f.requestId.toString()] || null,
     }));
 
     return res.json({ flagged: enriched });
@@ -440,14 +415,15 @@ const getUserDailyLogs = async (req, res) => {
       return res.status(400).json({ message: "date parameter required (YYYY-MM-DD)" });
     }
 
-    const user = await AccessRequest.findByPk(id);
+    const user = await AccessRequest.findById(id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
     // Get activity for the day
     const activity = await UserActivity.findOne({
-      where: { requestId: id, date },
+      requestId: id,
+      date,
     });
 
     // Get all scans for that day
@@ -455,16 +431,13 @@ const getUserDailyLogs = async (req, res) => {
     const endOfDay = new Date(date);
     endOfDay.setDate(endOfDay.getDate() + 1);
 
-    const logs = await ScanLog.findAll({
-      where: {
-        requestId: id,
-        createdAt: {
-          [Op.gte]: startOfDay,
-          [Op.lt]: endOfDay,
-        },
+    const logs = await ScanLog.find({
+      requestId: id,
+      createdAt: {
+        $gte: startOfDay,
+        $lt: endOfDay,
       },
-      order: [["createdAt", "ASC"]],
-    });
+    }).sort({ createdAt: 1 });
 
     return res.json({
       user: {
